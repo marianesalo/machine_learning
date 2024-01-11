@@ -8,12 +8,8 @@ from sklearn.metrics import (
     average_precision_score,
     f1_score,
     precision_score,
-    recall_score,
-    accuracy_score,
-    make_scorer,
-    auc
+    recall_score
 )
-from xgboost import XGBClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from typing import List
 
@@ -35,17 +31,23 @@ def evaluate_model_type(X_train: pd.DataFrame, y_train: pd.Series, model_type_na
     avg_time = []
     avg_f1_train = []
     avg_f1_val = []
+
+    # prepare cross validation
+    skf = StratifiedKFold(n_splits=10, random_state=4, shuffle=True)
+    skf.get_n_splits(X_train, y_train)
+
+    # perform cross validation for each model in model_types_obj:
     i = 0
     for model in model_types_obj:
-        print(model_type_names[i])
-        skf = StratifiedKFold(n_splits=10, random_state=4, shuffle=True)
-        skf.get_n_splits(X_train, y_train)
+        print('Performing cross validation for: ', model_type_names[i])
         performance_train = []
         performance_val = []
         f1s_train = []
         f1s_val = []
         performance_time = []
+
         for train_index, val_index in skf.split(X_train, y_train):
+            # prepare X and y
             X_train_cv, X_val = (
                 X_train.to_numpy()[train_index],
                 X_train.to_numpy()[val_index],
@@ -54,6 +56,8 @@ def evaluate_model_type(X_train: pd.DataFrame, y_train: pd.Series, model_type_na
                 y_train.to_numpy()[train_index],
                 y_train.to_numpy()[val_index],
             )
+
+            # train model
             start = time.time()
             model.fit(X_train_cv, y_train_cv)
             y_train_cv_proba = model.predict_proba(X_train_cv)[:, 1]
@@ -61,6 +65,8 @@ def evaluate_model_type(X_train: pd.DataFrame, y_train: pd.Series, model_type_na
             y_train_cv_pred = model.predict(X_train_cv)
             y_val_pred = model.predict(X_val)
             stop = time.time()
+
+            # calculate performance for current training step
             time_spent = stop - start
             metric_train = average_precision_score(y_train_cv, y_train_cv_proba)
             metric_val = average_precision_score(y_val, y_val_proba)
@@ -72,6 +78,7 @@ def evaluate_model_type(X_train: pd.DataFrame, y_train: pd.Series, model_type_na
             f1s_val.append(f1_val)
             performance_time.append(time_spent)
 
+        # calculate mean performance from the cross validation method
         avg_performance_train = np.mean(performance_train)
         avg_performance_val = np.mean(performance_val)
         avg_f1score_train = np.mean(f1s_train)
@@ -327,48 +334,40 @@ def plot_undersample_analysis(df_ratios: pd.DataFrame = None):
         return fig
 
 
-def perform_hiperparameter_search(X_train: pd.DataFrame, y_train: pd.Series, param_grid: dict = None):
+def perform_hiperparameter_search(
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        param_grid: dict = None,
+        eval_metric: str = 'average_precision',
+        model=None
+):
     """
     Perform hiperparameter search
     ----------------------------------------------------------------------------------------------------------
     :param [pandas.DataFrame] X_train: df with independent variables values
     :param [pandas.Series] y_train: pd.Series with dependent variable values
     :param [dict] param_grid: parameter to be analysed
+    :param [string] eval_metric: evaluation metric to be used by the search method
+    :param model: model object to search the parameters
     :return: search object
     """
 
-    # TODO: CHECK MAKE SCORER
-    # precision_recall_auc = make_scorer(auc, greater_is_better=True, needs_proba=True, reorder=True)
-    model = XGBClassifier(
-        objective="binary:logistic", eval_metric="aucpr", verbosity=2, random_state=48
-    )
+    if not model:
+        raise ValueError("Did not find a model object to search parameters")
 
     # define which parameters to test
     if not param_grid:
-        param_grid = {
-            "n_estimators": [3, 5, 7, 10, 20],
-            "learning_rate": [0.01, 0.05, 0.1, 0.2, 0.3],
-            "max_depth": [4, 7, 9, 15],  # max depth of a tree
-            "scale_pos_weight": [1, 5, 10, 20, 25, 50],
-            "subsample": [0.5, 0.7, 1],  # Fraction of observations to be random sampled for each tree
-            "colsample_bytree": [0.5, 0.7, 1],  # Fraction of features to be random sampled for each tree
-            "min_child_weight": [1, 3, 5, 7],  # Minimum sum of weights of all observations required in a child
-            "reg_alpha": [-1, 0, 1, 2, 5, 10],  # L1 regularization term
-            "reg_lambda": [-1, 0, 1, 2, 5, 10],  # L2 regularization term
-            "gamma": [-1, 0, 1, 2, 5, 10],  # Minimum loss reduction required to make a split
-            "max_delta_step": [0, 1, 2, 5, 10],  # Maximum delta step each tree weight estimation can be
-        }
+        raise ValueError("Did not find a parameter grid to be searched")
 
     # instantiate search
     search = RandomizedSearchCV(
         estimator=model,
         param_distributions=param_grid,
-        scoring="f1",  # TODO make_sorer precision_recall_auc
+        scoring=eval_metric,
         n_jobs=10,
         cv=10,
         return_train_score=True,
         random_state=42,
-        verbose=2,
         n_iter=300,
     )
 
